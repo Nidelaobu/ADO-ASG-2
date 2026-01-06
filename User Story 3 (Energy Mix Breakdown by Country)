@@ -1,0 +1,43 @@
+-- Energy Mix Breakdown by Country (Latest Available Year)
+
+WITH latest_year AS (
+    SELECT MAX(YEAR_ID) AS max_year
+    FROM FACT_COAL
+),
+mix AS (
+    SELECT
+        c.LOCATION_ID,
+        c.YEAR_ID,
+        c.SHARE_OF_ENERGY     AS COAL_PCT,
+        o.SHARE_OF_ENERGY     AS OIL_PCT,
+        NULL                  AS GAS_PCT,   -- gas share not available
+        r.TOTAL_SHARE         AS RENEWABLES_PCT,
+        n.SHARE_OF_ENERGY     AS NUCLEAR_PCT
+    FROM FACT_COAL c
+    LEFT JOIN FACT_OIL o
+        ON o.LOCATION_ID = c.LOCATION_ID
+       AND o.YEAR_ID = c.YEAR_ID
+    LEFT JOIN FACT_GAS g
+        ON g.LOCATION_ID = c.LOCATION_ID
+       AND g.YEAR_ID = c.YEAR_ID
+    LEFT JOIN FACT_RENEWABLES_TOTAL r
+        ON r.LOCATION_ID = c.LOCATION_ID
+       AND r.YEAR_ID = c.YEAR_ID
+    LEFT JOIN FACT_NUCLEAR n
+        ON n.LOCATION_ID = c.LOCATION_ID
+       AND n.YEAR_ID = c.YEAR_ID
+)
+SELECT
+    l.COUNTRY_NAME AS COUNTRY,
+    m.YEAR_ID      AS YEAR,
+    ROUND(m.COAL_PCT, 1)       AS COAL_PCT,
+    ROUND(m.OIL_PCT, 1)        AS OIL_PCT,
+    ROUND(m.GAS_PCT, 1)        AS GAS_PCT,
+    ROUND(m.RENEWABLES_PCT, 1) AS RENEWABLES_PCT,
+    ROUND(m.NUCLEAR_PCT, 1)    AS NUCLEAR_PCT
+FROM mix m
+JOIN DIM_LOCATION l
+    ON l.LOCATION_ID = m.LOCATION_ID
+JOIN latest_year y
+    ON m.YEAR_ID = y.max_year
+ORDER BY COUNTRY;
