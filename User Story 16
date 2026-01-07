@@ -1,0 +1,10 @@
+SELECT 
+    country, 
+    ROUND(renewables_share_energy, 2) AS renewable_share_pct
+FROM OWID_ENERGY_DATA_RAW
+WHERE year = 2022 
+  AND iso_code IS NOT NULL 
+  AND LENGTH(iso_code) = 3
+  AND renewables_share_energy IS NOT NULL
+ORDER BY renewables_share_energy DESC
+LIMIT 10;
