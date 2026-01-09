@@ -1,0 +1,7 @@
+SELECT
+year AS YEAR_ID,
+greenhouse_gas_emissions AS TOTAL_GHG_EMISSIONS
+FROM OWID_ENERGY_DATA_RAW
+WHERE country = 'World'
+AND year >= 2000
+ORDER BY year ASC;
