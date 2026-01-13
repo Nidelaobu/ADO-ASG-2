@@ -1,0 +1,453 @@
+CREATE DATABASE GRP5_ENERGY_DB_CLEAN;
+USE DATABASE GRP5_ENERGY_DB_CLEAN;
+
+-- Biofuel
+
+CREATE OR REPLACE TABLE GRP5_ENERGY_DB_CLEAN.PUBLIC.FACT_BIOFUEL AS
+SELECT
+COALESCE(c.COUNTRY_NAME, 'Unknown Country') as COUNTRY_NAME,
+CAST(r.YEAR_ID as INT) as YEAR,
+ROUND(r.CONSUMPTION, 4) as BIOFUEL_CONSUMPTION,
+ROUND(r.ELECTRICITY_GENERATED, 4) as ELECTRICITY_GENERATED_FROM_BIOFUEL,
+CASE WHEN r.CONSUMPTION > 0 THEN TRUE ELSE FALSE END as HAS_BIOFUEL_CONSUMPTION,
+CURRENT_TIMESTAMP() as LAST_UPDATED
+FROM BULLFROG_DB.public.fact_biofuel r
+LEFT JOIN BULLFROG_DB.public.DIM_LOCATION c
+    ON r.LOCATION_ID = c.location_id
+
+WHERE 
+    r.YEAR_ID >= 1900; -- Remove erroneous historical dates
+
+SELECT * from fact_biofuel;
+
+-- Coal
+
+select * from bullfrog_db.public.fact_coal;
+
+CREATE OR REPLACE TABLE GRP5_ENERGY_DB_CLEAN.PUBLIC.FACT_COAL AS
+SELECT
+r.LOCATION_ID as ISO_CODE,
+COALESCE(c.COUNTRY_NAME, 'Unknown Country') as COUNTRY_NAME,
+CAST(r.YEAR_ID as INT) as YEAR,
+ROUND(r.CONSUMPTION, 4) as COAL_CONSUMPTION,
+ROUND(r.PRODUCTION, 4) as COAL_PRODUCTION,
+ROUND(r.ELECTRICITY_GENERATED, 4) as ELECTRICITY_GENERATED_FROM_COAL,
+ROUND(r.SHARE_OF_ENERGY, 4) as SHARE_OF_ENERGY_PCT,
+CASE 
+    WHEN r.PRODUCTION > 0 THEN TRUE 
+    ELSE FALSE 
+END as HAS_COAL_PRODUCTION,
+CURRENT_TIMESTAMP() as LAST_UPDATED
+FROM BULLFROG_DB.public.fact_coal r
+LEFT JOIN BULLFROG_DB.public.dim_location c
+    ON r.LOCATION_ID = c.location_id
+
+WHERE 
+    r.YEAR_ID >= 1900;
+
+SELECT * from fact_coal;
+
+
+--- Economy 
+
+select * from bullfrog_db.public.fact_economy;
+
+CREATE OR REPLACE TABLE FACT_ECONOMY AS
+SELECT
+    -- 1. Standardize IDs
+    r.LOCATION_ID as ISO_CODE,
+    COALESCE(c.COUNTRY_NAME, 'Unknown Country') as COUNTRY_NAME,
+    
+    -- 2. Standardize Year
+    CAST(r.YEAR_ID as INT) as YEAR,
+    
+    -- 3. Clean Metrics
+    -- Convert Population to whole number (BigInt)
+    CAST(r.POPULATION as NUMBER(38,0)) as POPULATION,
+    
+    -- Keep GDP as money format (2 decimal places)
+    ROUND(r.GDP, 2) as GDP,
+    
+    -- 4. Derived Metric: GDP Per Capita
+    -- Handle division by zero or nulls automatically
+    ROUND(r.GDP / NULLIF(r.POPULATION, 0), 2) as GDP_PER_CAPITA,
+    
+    -- 5. Business Logic: Data Completeness Flag
+    CASE 
+        WHEN r.GDP IS NOT NULL AND r.POPULATION IS NOT NULL THEN TRUE 
+        ELSE FALSE 
+    END as HAS_COMPLETE_ECON_DATA,
+    
+    -- 6. Audit
+    CURRENT_TIMESTAMP() as LAST_UPDATED
+
+FROM BULLFROG_DB.PUBLIC.FACT_ECONOMY r
+LEFT JOIN BULLFROG_DB.PUBLIC.dim_location c
+    ON r.LOCATION_ID = c.location_ID;
+
+
+select * from fact_economy;
+
+-- Electricity
+
+select * from bullfrog_db.public.fact_electricity;
+
+-- Create the Clean Table
+CREATE OR REPLACE TABLE FACT_ELECTRICITY AS
+SELECT
+    -- 1. Standardize IDs
+    r.LOCATION_ID as ISO_CODE,
+    COALESCE(c.COUNTRY_NAME, 'Unknown Country') as COUNTRY_NAME,
+    
+    -- 2. Standardize Year
+    CAST(r.YEAR_ID as INT) as YEAR,
+    
+    -- 3. Clean Metrics (Standardizing precision)
+    ROUND(r.DEMAND, 2) as DEMAND_ELECTRICITY,
+    ROUND(r.GENERATION, 2) as GENERATION_ELECTRICITY,
+    
+    -- Derived Metric: Net Imports (Demand - Generation)
+    -- Note: This is an approximation. If Demand > Gen, they likely imported energy.
+    ROUND(r.DEMAND - r.GENERATION, 2) as EST_NET_IMPORTS_ELECTRICITY,
+    
+    ROUND(r.PER_CAPITA, 1) as PER_CAPITA_KWH,
+    
+    -- Environmental Metrics
+    ROUND(r.CARBON_INTENSITY, 2) as CARBON_INTENSITY_GCO2_KWH,
+    ROUND(r.GHG_EMISSIONS, 2) as GHG_EMISSIONS_MTCO2,
+    
+    -- 4. Business Logic: Data Quality Flag
+    -- "Do we have carbon data for this year?"
+    CASE 
+        WHEN r.CARBON_INTENSITY > 0 THEN TRUE 
+        ELSE FALSE 
+    END as HAS_CARBON_DATA,
+    
+    -- 5. Audit
+    CURRENT_TIMESTAMP() as LAST_UPDATED
+
+FROM BULLFROG_DB.PUBLIC.FACT_ELECTRICITY r
+LEFT JOIN BULLFROG_DB.PUBLIC.dim_location c
+    ON r.LOCATION_ID = c.location_id;
+
+select * from fact_electricity;
+
+-- Fossil Total
+
+select * from BULLFROG_DB.public.fact_fossil_total;
+
+-- Create the Clean Table
+CREATE OR REPLACE TABLE FACT_FOSSIL_TOTAL AS
+SELECT
+    -- 1. Standardize IDs
+    r.LOCATION_ID as ISO_CODE,
+    COALESCE(c.COUNTRY_NAME, 'Unknown Country') as COUNTRY_NAME,
+    
+    -- 2. Standardize Year
+    CAST(r.YEAR_ID as INT) as YEAR,
+    
+    -- 3. Clean Metrics
+    ROUND(r.TOTAL_CONSUMPTION, 2) as TOTAL_FOSSIL_CONSUMPTION,
+    ROUND(r.TOTAL_SHARE, 2) as FOSSIL_SHARE_OF_ENERGY_PCT,
+    
+    -- 4. Business Logic: Dependency Flag
+    -- "Is this country primarily powered by fossil fuels?"
+    CASE 
+        WHEN r.TOTAL_SHARE >= 50 THEN TRUE 
+        ELSE FALSE 
+    END as IS_FOSSIL_DEPENDENT,
+    
+    -- 5. Audit
+    CURRENT_TIMESTAMP() as LAST_UPDATED
+
+FROM BULLFROG_DB.PUBLIC.FACT_FOSSIL_TOTAL r
+LEFT JOIN BULLFROG_DB.PUBLIC.DIM_LOCATION c
+    ON r.LOCATION_ID = c.LOCATION_ID;
+
+select * from fact_fossil_total;
+
+
+-- GAS
+select * from BULLFROG_DB.public.fact_gas;
+
+-- Create the Clean Table
+CREATE OR REPLACE TABLE FACT_GAS AS
+SELECT
+    -- 1. Standardize IDs
+    r.LOCATION_ID as ISO_CODE,
+    COALESCE(c.COUNTRY_NAME, 'Unknown Country') as COUNTRY_NAME,
+    
+    -- 2. Standardize Year
+    CAST(r.YEAR_ID as INT) as YEAR,
+    
+    -- 3. Clean Metrics
+    ROUND(r.CONSUMPTION, 4) as GAS_CONSUMPTION,
+    ROUND(r.PRODUCTION, 4) as GAS_PRODUCTION,
+    ROUND(r.ELECTRICITY_GENERATED, 4) as ELECTRICITY_GENERATED_FROM_GAS,
+    
+    -- 4. Business Logic: Market Position Flags
+    CASE 
+        WHEN r.PRODUCTION > 0 THEN TRUE 
+        ELSE FALSE 
+    END as IS_GAS_PRODUCER,
+    
+    -- Check if they produce more than they use (Net Exporter)
+    -- Handle the edge case where Consumption is 0 but Production > 0
+    CASE 
+        WHEN r.PRODUCTION > r.CONSUMPTION THEN TRUE 
+        ELSE FALSE 
+    END as IS_NET_EXPORTER,
+    
+    -- 5. Audit
+    CURRENT_TIMESTAMP() as LAST_UPDATED
+
+FROM BULLFROG_DB.PUBLIC.FACT_GAS r
+LEFT JOIN BULLFROG_DB.PUBLIC.DIM_LOCATION c
+    ON r.LOCATION_ID = c.LOCATION_ID;
+
+SELECT * FROM FACT_GAS;
+
+
+
+-- Hyrdro
+select * from bullfrog_db.public.fact_hydro;
+
+
+-- Create the Clean Table
+CREATE OR REPLACE TABLE FACT_HYDRO AS
+SELECT
+    -- 1. Standardize IDs
+    r.LOCATION_ID as ISO_CODE,
+    COALESCE(c.COUNTRY_NAME, 'Unknown Country') as COUNTRY_NAME,
+    
+    -- 2. Standardize Year
+    CAST(r.YEAR_ID as INT) as YEAR,
+    
+    -- 3. Clean Metrics
+    ROUND(r.CONSUMPTION, 4) as HYDRO_CONSUMPTION,
+    ROUND(r.ELECTRICITY_GENERATED, 4) as ELECTRICITY_GENERATED_FROM_HYDRO,
+    
+    -- 4. Business Logic: Capability Flag
+    CASE 
+        WHEN r.ELECTRICITY_GENERATED > 0 THEN TRUE 
+        ELSE FALSE 
+    END as HAS_HYDRO_POWER,
+    
+    -- 5. Audit
+    CURRENT_TIMESTAMP() as LAST_UPDATED
+
+FROM BULLFROG_DB.PUBLIC.FACT_HYDRO r
+LEFT JOIN BULLFROG_DB.PUBLIC.DIM_LOCATION c
+    ON r.LOCATION_ID = c.LOCATION_ID;
+
+select * from fact_hydro;
+
+
+
+-- Nuclear 
+select * from bullfrog_db.public.fact_nuclear;
+
+-- Create the Clean Table
+CREATE OR REPLACE TABLE FACT_NUCLEAR AS
+SELECT
+    -- 1. Standardize IDs
+    r.LOCATION_ID as ISO_CODE,
+    COALESCE(c.COUNTRY_NAME, 'Unknown Country') as COUNTRY_NAME,
+    
+    -- 2. Standardize Year
+    CAST(r.YEAR_ID as INT) as YEAR,
+    
+    -- 3. Clean Metrics & Fix Anomalies
+    -- Fix: If Consumption is 0 but Gen > 0, estimate Cons as Gen / 0.33 (approx efficiency)
+    ROUND(
+        CASE 
+            WHEN r.CONSUMPTION = 0 AND r.ELECTRICITY_GENERATED > 0 
+            THEN r.ELECTRICITY_GENERATED / 0.33 
+            ELSE r.CONSUMPTION 
+        END, 
+    4) as NUCLEAR_CONSUMPTION,
+    
+    ROUND(r.ELECTRICITY_GENERATED, 4) as ELECTRICITY_GENERATED_FROM_NUCLEAR,
+    ROUND(r.SHARE_OF_ENERGY, 4) as SHARE_OF_ENERGY_PCT,
+    
+    -- 4. Business Logic: Capacity Flags
+    CASE 
+        WHEN r.ELECTRICITY_GENERATED > 0 THEN TRUE 
+        ELSE FALSE 
+    END as HAS_NUCLEAR_CAPACITY,
+    
+    CASE 
+        WHEN r.SHARE_OF_ENERGY > 20 THEN TRUE 
+        ELSE FALSE 
+    END as IS_MAJOR_NUCLEAR_POWER,
+    
+    -- 5. Audit
+    CURRENT_TIMESTAMP() as LAST_UPDATED
+
+FROM BULLFROG_DB.PUBLIC.FACT_NUCLEAR r
+LEFT JOIN BULLFROG_DB.PUBLIC.DIM_LOCATION c
+    ON r.LOCATION_ID = c.LOCATION_ID;
+
+
+SELECT * FROM fact_nuclear;
+
+-- OIL 
+select * from bullfrog_db.public.fact_oil;
+
+-- Create the Clean Table
+CREATE OR REPLACE TABLE FACT_OIL AS
+SELECT
+    -- 1. Standardize IDs
+    r.LOCATION_ID as ISO_CODE,
+    COALESCE(c.COUNTRY_NAME, 'Unknown Country') as COUNTRY_NAME,
+    
+    -- 2. Standardize Year
+    CAST(r.YEAR_ID as INT) as YEAR,
+    
+    -- 3. Clean Metrics
+    ROUND(r.CONSUMPTION, 4) as OIL_CONSUMPTION,
+    ROUND(r.PRODUCTION, 4) as OIL_PRODUCTION,
+    ROUND(r.ELECTRICITY_GENERATED, 4) as ELECTRICITY_GENERATED_FROM_OIL,
+    ROUND(r.SHARE_OF_ENERGY, 4) as SHARE_OF_ENERGY_PCT,
+    
+    -- 4. Business Logic: Market Position Flags
+    CASE 
+        WHEN r.PRODUCTION > r.CONSUMPTION THEN TRUE 
+        ELSE FALSE 
+    END as IS_NET_EXPORTER,
+    
+    -- Identify economies that rely heavily on oil
+    CASE 
+        WHEN r.SHARE_OF_ENERGY > 50 THEN TRUE 
+        ELSE FALSE 
+    END as IS_OIL_DEPENDENT,
+    
+    -- Flag for the "Production > 0 but Consumption = 0" pattern
+    CASE 
+        WHEN r.PRODUCTION > 0 AND r.CONSUMPTION = 0 THEN TRUE 
+        ELSE FALSE 
+    END as IS_PURE_EXPORTER,
+    
+    -- 5. Audit
+    CURRENT_TIMESTAMP() as LAST_UPDATED
+
+FROM BULLFROG_DB.PUBLIC.FACT_OIL r
+LEFT JOIN BULLFROG_DB.PUBLIC.DIM_LOCATION c
+    ON r.LOCATION_ID = c.LOCATION_ID;
+
+select * FROM FACT_OIL;
+
+--Renewables Total
+select * from bullfrog_db.public.fact_renewables_total;
+
+-- Create the Clean Table
+CREATE OR REPLACE TABLE FACT_RENEWABLES_TOTAL AS
+SELECT
+    -- 1. Standardize IDs
+    r.LOCATION_ID as ISO_CODE,
+    COALESCE(c.COUNTRY_NAME, 'Unknown Country') as COUNTRY_NAME,
+    
+    -- 2. Standardize Year
+    CAST(r.YEAR_ID as INT) as YEAR,
+    
+    -- 3. Clean Metrics
+    ROUND(r.TOTAL_CONSUMPTION, 2) as TOTAL_RENEWABLES_CONSUMPTION,
+    ROUND(r.TOTAL_SHARE, 2) as RENEWABLES_SHARE_OF_ENERGY_PCT,
+    
+    -- 4. Business Logic: Transition Flags
+    -- "Is this country primarily powered by renewables?"
+    CASE 
+        WHEN r.TOTAL_SHARE >= 50 THEN TRUE 
+        ELSE FALSE 
+    END as IS_GREEN_ECONOMY,
+    
+    -- "Is this country actively transitioning?"
+    CASE 
+        WHEN r.TOTAL_SHARE >= 10 THEN TRUE 
+        ELSE FALSE 
+    END as HAS_SIGNIFICANT_RENEWABLES,
+    
+    -- 5. Audit
+    CURRENT_TIMESTAMP() as LAST_UPDATED
+
+FROM BULLFROG_DB.PUBLIC.fact_renewables_total r
+LEFT JOIN BULLFROG_DB.PUBLIC.DIM_LOCATION c
+    ON r.LOCATION_ID = c.LOCATION_ID;
+
+select * from fact_renewables_total;
+
+-- Solar
+select * from bullfrog_db.public.fact_solar;
+
+-- Create the Clean Table
+CREATE OR REPLACE TABLE FACT_SOLAR AS
+SELECT
+    -- 1. Standardize IDs
+    r.LOCATION_ID as ISO_CODE,
+    COALESCE(c.COUNTRY_NAME, 'Unknown Country') as COUNTRY_NAME,
+    
+    -- 2. Standardize Year
+    CAST(r.YEAR_ID as INT) as YEAR,
+    
+    -- 3. Clean Metrics
+    ROUND(r.CONSUMPTION, 4) as SOLAR_CONSUMPTION,
+    ROUND(r.ELECTRICITY_GENERATED, 4) as ELECTRICITY_GENERATED_FROM_SOLAR,
+    
+    -- 4. Business Logic: Adoption Flags
+    CASE 
+        WHEN r.ELECTRICITY_GENERATED > 0 THEN TRUE 
+        ELSE FALSE 
+    END as HAS_SOLAR_ADOPTION,
+    
+    -- Identify major players (Arbitrary threshold for analysis, e.g., > 10 TWh)
+    CASE 
+        WHEN r.ELECTRICITY_GENERATED > 10 THEN TRUE 
+        ELSE FALSE 
+    END as IS_SOLAR_LEADER,
+    
+    -- 5. Audit
+    CURRENT_TIMESTAMP() as LAST_UPDATED
+    
+FROM BULLFROG_DB.PUBLIC.fact_solar r
+LEFT JOIN BULLFROG_DB.PUBLIC.DIM_LOCATION c
+    ON r.LOCATION_ID = c.LOCATION_ID;
+
+select * from FACT_SOLAR;
+
+-- Wind
+select * from bullfrog_db.public.fact_wind;
+
+-- Create the Clean Table
+CREATE OR REPLACE TABLE FACT_WIND AS
+SELECT
+    -- 1. Standardize IDs
+    r.LOCATION_ID as ISO_CODE,
+    COALESCE(c.COUNTRY_NAME, 'Unknown Country') as COUNTRY_NAME,
+    
+    -- 2. Standardize Year
+    CAST(r.YEAR_ID as INT) as YEAR,
+    
+    -- 3. Clean Metrics
+    ROUND(r.CONSUMPTION, 4) as WIND_CONSUMPTION,
+    ROUND(r.ELECTRICITY_GENERATED, 4) as ELECTRICITY_GENERATED_FROM_WIND,
+    
+    -- 4. Business Logic: Adoption Flags
+    CASE 
+        WHEN r.ELECTRICITY_GENERATED > 0 THEN TRUE 
+        ELSE FALSE 
+    END as HAS_WIND_ADOPTION,
+    
+    -- Identify major players (Arbitrary threshold for analysis, e.g., > 10 TWh)
+    CASE 
+        WHEN r.ELECTRICITY_GENERATED > 10 THEN TRUE 
+        ELSE FALSE 
+    END as IS_WIND_LEADER,
+    
+    -- 5. Audit
+    CURRENT_TIMESTAMP() as LAST_UPDATED
+
+FROM BULLFROG_DB.PUBLIC.fact_wind r
+LEFT JOIN BULLFROG_DB.PUBLIC.DIM_LOCATION c
+    ON r.LOCATION_ID = c.LOCATION_ID;
+
+select * from FACT_WIND;
