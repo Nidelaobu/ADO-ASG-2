@@ -1,0 +1,48 @@
+/* US-20: Top vs Bottom Renewable Adoption
+   Goal: Visualize the contrast between leaders and laggards.
+   Technique: Uses Window Functions to rank countries automatically.
+*/
+select * from VW_TOP_RENEWABLE_LEADERS_BETWEEN_2012_AND_2022;
+
+/* US-20: Top vs Bottom Renewable Adoption
+   Update: Filtered out Regional Aggregates (OWID_%) for accurate country ranking.
+*/
+
+
+CREATE OR REPLACE VIEW VW_TOP_RENEWABLE_LEADERS_2024 AS
+
+WITH Country_Latest_Year AS (
+    -- 1. Find the latest year of data for EACH country individually
+    SELECT 
+        ISO_CODE,
+        MAX(YEAR) as LATEST_YEAR
+    FROM FACT_RENEWABLES_TOTAL
+    WHERE ISO_CODE NOT LIKE 'OWID_%' -- BLOCKER FIX: Remove World/Regions
+    GROUP BY ISO_CODE
+),
+Ranked_Countries AS (
+    -- 2. Join back to get the values and Rank them
+    SELECT 
+        r.COUNTRY_NAME,
+        r.ISO_CODE,
+        r.YEAR,
+        r.RENEWABLES_SHARE_OF_ENERGY_PCT,
+        -- Rank High-to-Low (Leaders)
+        RANK() OVER (ORDER BY r.RENEWABLES_SHARE_OF_ENERGY_PCT DESC) as Rank_Top,
+    FROM FACT_RENEWABLES_TOTAL r
+    JOIN Country_Latest_Year cly
+        ON r.ISO_CODE = cly.ISO_CODE 
+        AND r.YEAR = cly.LATEST_YEAR
+    WHERE r.RENEWABLES_SHARE_OF_ENERGY_PCT IS NOT NULL
+)
+
+SELECT 
+    COUNTRY_NAME,
+    YEAR,
+    RENEWABLES_SHARE_OF_ENERGY_PCT,
+    Rank_Top AS SORT_ORDER
+FROM Ranked_Countries
+WHERE Rank_Top <= 15;
+
+select * from VW_TOP_RENEWABLE_LEADERS_2024;
+
