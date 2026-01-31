@@ -1,0 +1,186 @@
+CREATE VIEW FOR US-25 - EMISSIONS TRENDS
+
+-- ================================================================================
+-- This view provides emissions data with time-series analysis
+-- Use this for your line charts, area charts, and trend analysis
+
+CREATE OR REPLACE VIEW VW_EMISSIONS_TRENDS AS
+SELECT
+    e.ISO_CODE,
+    e.COUNTRY_NAME,
+    e.YEAR,
+    
+    -- Decade grouping for trend analysis
+    FLOOR(e.YEAR / 10) * 10 AS DECADE,
+    CONCAT(FLOOR(e.YEAR / 10) * 10, 's') AS DECADE_LABEL,
+    
+    -- Emissions metrics
+    e.GHG_EMISSIONS_MTCO2,
+    e.CARBON_INTENSITY_GCO2_KWH,
+    e.GENERATION_ELECTRICITY,
+    e.DEMAND_ELECTRICITY,
+    
+    -- Per capita emissions (tons per person)
+    ROUND(
+        e.GHG_EMISSIONS_MTCO2 * 1000000 /
+        NULLIF(ec.POPULATION, 0),
+        4
+    ) AS EMISSIONS_PER_CAPITA_TONS,
+    
+    -- Emissions intensity (per GDP)
+    ROUND(
+        e.GHG_EMISSIONS_MTCO2 /
+        NULLIF(ec.GDP, 0) * 1000,
+        4
+    ) AS EMISSIONS_INTENSITY_PER_GDP,
+    
+    -- Year-over-year change
+    e.GHG_EMISSIONS_MTCO2 - LAG(e.GHG_EMISSIONS_MTCO2, 1)
+        OVER (PARTITION BY e.ISO_CODE ORDER BY e.YEAR) AS YOY_EMISSIONS_CHANGE,
+    
+    ROUND(
+        (e.GHG_EMISSIONS_MTCO2 - LAG(e.GHG_EMISSIONS_MTCO2, 1)
+            OVER (PARTITION BY e.ISO_CODE ORDER BY e.YEAR)) /
+        NULLIF(LAG(e.GHG_EMISSIONS_MTCO2, 1)
+            OVER (PARTITION BY e.ISO_CODE ORDER BY e.YEAR), 0) * 100,
+        2
+    ) AS YOY_EMISSIONS_CHANGE_PCT,
+    
+    -- 5-year moving average
+    ROUND(
+        AVG(e.GHG_EMISSIONS_MTCO2)
+            OVER (PARTITION BY e.ISO_CODE
+                  ORDER BY e.YEAR
+                  ROWS BETWEEN 4 PRECEDING AND CURRENT ROW),
+        2
+    ) AS EMISSIONS_5YR_MOVING_AVG,
+    
+    -- Cumulative emissions over time
+    SUM(e.GHG_EMISSIONS_MTCO2)
+        OVER (PARTITION BY e.ISO_CODE
+              ORDER BY e.YEAR
+              ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS CUMULATIVE_EMISSIONS,
+    
+    -- Economy data
+    ec.POPULATION,
+    ec.GDP,
+    ec.GDP_PER_CAPITA,
+    
+    -- Data quality flag
+    e.HAS_CARBON_DATA,
+    
+    CURRENT_TIMESTAMP() AS CREATED_AT
+
+FROM FACT_ELECTRICITY e
+LEFT JOIN FACT_ECONOMY ec
+    ON e.ISO_CODE = ec.ISO_CODE AND e.YEAR = ec.YEAR
+
+WHERE e.GHG_EMISSIONS_MTCO2 IS NOT NULL
+
+ORDER BY e.YEAR DESC, e.GHG_EMISSIONS_MTCO2 DESC;
+
+ 
+
+-- Test the view
+SELECT * FROM VW_EMISSIONS_TRENDS
+WHERE YEAR >= 2020
+LIMIT 10;
+
+-- CREATE SUMMARY VIEW FOR US-25 - DECADAL ANALYSIS
+-- ================================================================================
+-- Aggregated view by decade for decadal comparison charts
+
+CREATE OR REPLACE VIEW VW_EMISSIONS_BY_DECADE AS
+SELECT
+    FLOOR(YEAR / 10) * 10 AS DECADE,
+    CONCAT(FLOOR(YEAR / 10) * 10, 's') AS DECADE_LABEL,
+    
+    -- Global totals
+    SUM(GHG_EMISSIONS_MTCO2) AS TOTAL_EMISSIONS,
+    AVG(GHG_EMISSIONS_MTCO2) AS AVG_ANNUAL_EMISSIONS,
+    STDDEV(GHG_EMISSIONS_MTCO2) AS EMISSIONS_STDDEV,
+    
+    -- Country metrics
+    COUNT(DISTINCT COUNTRY_NAME) AS NUM_COUNTRIES,
+    
+    -- Averages
+    AVG(CARBON_INTENSITY_GCO2_KWH) AS AVG_CARBON_INTENSITY,
+    AVG(GENERATION_ELECTRICITY) AS AVG_ELECTRICITY_GENERATION,
+    
+    -- Min/Max
+    MIN(YEAR) AS DECADE_START_YEAR,
+    MAX(YEAR) AS DECADE_END_YEAR,
+    
+    CURRENT_TIMESTAMP() AS CREATED_AT
+
+FROM FACT_ELECTRICITY
+WHERE GHG_EMISSIONS_MTCO2 IS NOT NULL
+GROUP BY DECADE, DECADE_LABEL
+ORDER BY DECADE;
+
+ 
+
+-- Test the view
+SELECT * FROM VW_EMISSIONS_BY_DECADE;
+
+ 
+
+-- ================================================================================
+-- CREATE VIEW FOR TOP EMITTERS (US-25)
+-- ================================================================================
+-- Latest year top emitters for KPI cards and focused analysis
+
+CREATE OR REPLACE VIEW VW_TOP_EMITTERS_LATEST AS
+WITH latest_year AS (
+    SELECT MAX(YEAR) AS max_year
+    FROM FACT_ELECTRICITY
+)
+SELECT
+    e.ISO_CODE,
+    e.COUNTRY_NAME,
+    e.YEAR,
+    e.GHG_EMISSIONS_MTCO2,
+    
+    -- Rankings
+    RANK() OVER (ORDER BY e.GHG_EMISSIONS_MTCO2 DESC) AS EMISSIONS_RANK,
+    
+    -- Per capita
+    ROUND(
+        e.GHG_EMISSIONS_MTCO2 * 1000000 /
+        NULLIF(ec.POPULATION, 0),
+        4
+    ) AS EMISSIONS_PER_CAPITA,
+    
+    RANK() OVER (ORDER BY
+        e.GHG_EMISSIONS_MTCO2 * 1000000 /
+        NULLIF(ec.POPULATION, 0) DESC
+    ) AS PER_CAPITA_RANK,
+    
+    -- Share of global emissions
+    ROUND(
+        e.GHG_EMISSIONS_MTCO2 /
+        SUM(e.GHG_EMISSIONS_MTCO2) OVER () * 100,
+        2
+    ) AS GLOBAL_EMISSIONS_SHARE_PCT,
+    
+    e.CARBON_INTENSITY_GCO2_KWH,
+    ec.POPULATION,
+    ec.GDP,
+    ec.GDP_PER_CAPITA,
+    
+    CURRENT_TIMESTAMP() AS CREATED_AT
+
+FROM FACT_ELECTRICITY e
+LEFT JOIN FACT_ECONOMY ec
+    ON e.ISO_CODE = ec.ISO_CODE AND e.YEAR = ec.YEAR
+CROSS JOIN latest_year ly
+
+WHERE e.YEAR = ly.max_year
+  AND e.GHG_EMISSIONS_MTCO2 IS NOT NULL
+
+ORDER BY e.GHG_EMISSIONS_MTCO2 DESC;
+
+ 
+
+-- Test the view
+SELECT * FROM VW_TOP_EMITTERS_LATEST LIMIT 20;
